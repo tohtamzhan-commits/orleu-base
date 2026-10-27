@@ -387,7 +387,8 @@ VIEWS.room = async id => {
   const r = S.meta.rooms.find(x => x.id === Number(id));
   if (!r) throw new Error('Кабинет не найден');
   const list = S.assets.filter(a => a.room === r.code);
-  const stock = (await api('GET', '/api/stock')).filter(s => s.room === r.code);
+  S.stock = await api('GET', '/api/stock');   // нужен кнопкам «Выдать» / «Приход» / ✎
+  const stock = S.stock.filter(s => s.room === r.code);
   const people = S.meta.employees.filter(e => e.room === r.code);
   const groups = {};
   for (const a of list) (groups[a.employee || 'Не закреплено за сотрудником'] ||= []).push(a);
@@ -399,8 +400,13 @@ VIEWS.room = async id => {
   ${people.length ? `<div class="note">Сотрудники кабинета: ${people.map(p => `<a href="#/emp/${p.id}">${esc(p.full_name)}</a>`).join(', ')}</div>` : ''}
   <div class="panel"><h2>Основные средства — ${list.length}</h2>
     ${Object.entries(groups).map(([who, arr]) => `<h3>👤 ${esc(who)} — ${arr.length} ед.</h3>${assetTable(arr, { showRoom: false, showEmp: false })}`).join('') || '<div class="empty">Техники нет</div>'}</div>
-  ${stock.length ? `<div class="panel"><h2>ТМЗ в кабинете</h2><table><tr><th>Наименование</th><th>Остаток</th><th>Примечание</th></tr>
-    ${stock.map(s => `<tr><td>${esc(s.name)}</td><td class="num">${s.qty} ${esc(s.unit)}</td><td>${esc(s.notes)}</td></tr>`).join('')}</table></div>` : ''}`;
+  <div class="panel"><div class="top"><h2>ТМЗ в кабинете${stock.length ? ' — ' + stock.length : ''}</h2>
+    <div class="btnrow"><button onclick="location.hash='#/stock'">Весь склад ТМЗ →</button></div></div>
+    ${stock.length ? `<div class="scroll"><table><tr><th class="num-col">№</th><th>Наименование</th><th>Остаток</th><th class="hide-sm">Примечание</th><th></th></tr>
+    ${stock.map((s, i) => `<tr><td class="num-col">${i + 1}</td><td>${esc(s.name)}</td>
+      <td class="num ${s.qty <= s.min_qty ? 'bad' : 'ok'}"><b>${s.qty}</b> ${esc(s.unit)}</td><td class="hide-sm">${esc(s.notes)}</td>
+      <td style="white-space:nowrap">${isAdmin() ? `<button onclick="stockMove(${s.id},-1)">Выдать</button> <button onclick="stockMove(${s.id},1)">Приход</button> <button onclick="editStock(${s.id})">✎</button>` : ''}
+        <button onclick="stockHistory(${s.id})">🕘</button></td></tr>`).join('')}</table></div>` : '<div class="empty">В этом кабинете расходных материалов нет</div>'}</div>`;
 };
 
 function editRoom(id) {
