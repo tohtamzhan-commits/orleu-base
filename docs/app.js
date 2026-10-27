@@ -777,6 +777,8 @@ VIEWS.reports = async () => {
   const tbl = (title, obj) => `<div class="panel"><h3>${title}</h3><table>${Object.entries(obj).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num"><b>${v}</b></td></tr>`).join('')}</table></div>`;
   const rep = (kind, icon, name, desc) => `<button style="min-height:96px;text-align:left" onclick="download('${kind}')"><span class="qico">${icon}</span><b>${name}</b><br><small class="muted">${desc}</small></button>`;
   return `<h1>Отчёты</h1>
+  <div class="panel"><h2>Печатные отчёты</h2><div class="quickgrid">
+    <button style="min-height:96px;text-align:left" onclick="location.hash='#/summary'"><span class="qico">📑</span><b>Сведения о наличии техники</b><br><small class="muted">Сводный баланс и распределение по кабинетам, печать в PDF</small></button></div></div>
   <div class="panel"><h2>Выгрузка в Excel</h2><div class="quickgrid">
     ${rep('assets', '📄', 'Реестр ОС', 'Вся техника со всеми полями')}${rep('rooms', '🚪', 'По кабинетам', 'Отдельный лист на каждый кабинет')}
     ${rep('employees', '👥', 'По сотрудникам', 'Что за кем закреплено')}${rep('writeoff', '🛠️', 'Списание и неисправные', 'Кандидаты на списание')}
@@ -784,6 +786,107 @@ VIEWS.reports = async () => {
   <div class="dash-two">${tbl('По состоянию', by('condition'))}${tbl('По статусу', by('status'))}</div>
   <div class="dash-two">${tbl('По категориям', by('category'))}${tbl('По кабинетам', by('room'))}</div>`;
 };
+
+// ----- сведения о наличии техники (печатный отчёт) -----
+// Тип принтера определяется по модели в названии: МФУ — это ч/б принтер со сканером.
+function printerKind(name) {
+  const n = name.toLowerCase();
+  if (/3d/.test(n)) return 'p3d';
+  if (/цвет|color|xerox c3/.test(n)) return 'pcolor';
+  if (/мфу|mfp|многофункц|сканер|mf\s?\d{4}|f166400/.test(n)) return 'pscan';
+  return 'pbw';
+}
+
+// вид техники для отчёта: [ключ, колонка]
+function summaryKind(a) {
+  const c = a.category;
+  if (c === 'Моноблоки') return ['mono', 'pc'];
+  if (c === 'Компьютеры') return ['comp', 'pc'];
+  if (c === 'Ноутбуки') return ['note', 'pc'];
+  if (c === 'Мониторы') return ['mon', 'pc'];
+  if (c === 'Интерактивные панели') return ['panel', 'media'];
+  if (c === 'Проекторы') return ['proj', 'media'];
+  if (c === 'Принтеры и МФУ') return [printerKind(a.name), 'print'];
+  return ['other:' + c, 'other'];
+}
+
+// [единственное, 2–4, 5+] по-русски; по-казахски существительное после числа не меняется
+const SUMMARY_WORDS = {
+  mono: [['моноблок', 'моноблока', 'моноблоков'], 'моноблок', 'Моноблоки', 'Моноблоктар'],
+  comp: [['компьютер', 'компьютера', 'компьютеров'], 'компьютер', 'Компьютеры', 'Компьютерлер'],
+  note: [['ноутбук', 'ноутбука', 'ноутбуков'], 'ноутбук', 'Ноутбуки', 'Ноутбуктер'],
+  mon: [['монитор', 'монитора', 'мониторов'], 'монитор', 'Мониторы', 'Мониторлар'],
+  panel: [['интерактивная панель', 'интерактивные панели', 'интерактивных панелей'], 'интерактивті панель', 'Интерактивные панели', 'Интерактивті панельдер'],
+  proj: [['проектор', 'проектора', 'проекторов'], 'проектор', 'Проекторы', 'Проекторлар'],
+  pbw: [['ч/б принтер', 'ч/б принтера', 'ч/б принтеров'], 'а/қ принтер', 'Ч/б принтеры', 'А/қ принтерлер'],
+  pscan: [['ч/б принтер со сканером', 'ч/б принтера со сканером', 'ч/б принтеров со сканером'], 'сканері бар а/қ принтер', 'Ч/б принтеры + сканер', 'Сканері бар а/қ принтерлер'],
+  pcolor: [['цветной принтер', 'цветных принтера', 'цветных принтеров'], 'түрлі түсті принтер', 'Цветные принтеры', 'Түрлі түсті принтерлер'],
+  p3d: [['3D-принтер', '3D-принтера', '3D-принтеров'], '3D-принтер', '3D-принтеры', '3D-принтерлер'],
+};
+const KIND_ORDER = ['mono', 'comp', 'note', 'mon', 'panel', 'proj', 'pbw', 'pscan', 'pcolor', 'p3d'];
+
+function countWord(key, n) {
+  const kk = LANG === 'kk';
+  if (key.startsWith('other:')) { const c = key.slice(6); return `${kk ? trText(c) : c}: ${n}`; }
+  const w = SUMMARY_WORDS[key];
+  if (kk) return `${n} ${w[1]}`;
+  const f = n % 10 === 1 && n % 100 !== 11 ? 0 : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 1 : 2;
+  return `${n} ${w[0][f]}`;
+}
+
+const isStoreRoom = code => /^Склад|лестниц/i.test(code || '');
+
+VIEWS.summary = async () => {
+  await loadAssets();
+  const kk = LANG === 'kk', T = (ru, kz) => kk ? kz : ru;
+  const o = S.sumOpts ||= { writeoff: false, stores: false };
+  // считаем физические вещи: вместо разделённого комплекта — его части
+  const items = S.assets.filter(a => a.status !== 'Списана' && a.category !== 'Программное обеспечение' && !a.parts
+    && (o.writeoff || a.status !== 'Предлагается к списанию') && (o.stores || !isStoreRoom(a.room)));
+  const total = {}, roomMap = new Map();
+  for (const a of items) {
+    const [key, col] = summaryKind(a);
+    total[key] = (total[key] || 0) + 1;
+    const room = a.room || '';
+    if (!roomMap.has(room)) roomMap.set(room, { pc: {}, media: {}, print: {}, other: {} });
+    const r = roomMap.get(room)[col];
+    r[key] = (r[key] || 0) + 1;
+  }
+  const order = k => { const i = KIND_ORDER.indexOf(k); return i < 0 ? 99 : i; };
+  const cell = obj => {
+    const keys = Object.keys(obj).sort((x, y) => order(x) - order(y) || x.localeCompare(y));
+    return keys.length ? keys.map(k => esc(countWord(k, obj[k]))).join(', ') : '—';
+  };
+  const line = key => total[key] ? `<div>${esc(kk ? SUMMARY_WORDS[key][3] : SUMMARY_WORDS[key][2])}: <b>${total[key]} ${T('шт.', 'дана')}</b></div>` : '';
+  const others = Object.keys(total).filter(k => k.startsWith('other:')).sort();
+  const rooms = [...roomMap.keys()].sort((x, y) => x === '' ? 1 : y === '' ? -1 : byRoom({ code: x }, { code: y }));
+  const hasOther = rooms.some(r => Object.keys(roomMap.get(r).other).length);
+  const sum = Object.values(total).reduce((s, n) => s + n, 0);
+  const date = new Date().toLocaleDateString(kk ? 'kk-KZ' : 'ru-RU');
+  return `<div class="btnrow no-print"><button onclick="history.back()">${T('← Назад', '← Артқа')}</button>
+    <button class="primary" onclick="print()">${T('🖨 Печать / сохранить в PDF', '🖨 Басып шығару / PDF сақтау')}</button>
+    <label class="opt"><input type="checkbox" ${o.writeoff ? 'checked' : ''} onchange="S.sumOpts.writeoff=this.checked;route()"> ${T('учитывать предложенные к списанию', 'есептен шығаруға ұсынылғандарды есептеу')}</label>
+    <label class="opt"><input type="checkbox" ${o.stores ? 'checked' : ''} onchange="S.sumOpts.stores=this.checked;route()"> ${T('учитывать склады и «под лестницей»', 'қоймалар мен «баспалдақ астын» есептеу')}</label></div>
+  <div class="summary" translate="no">
+    <div class="sum-head"><h1>${T('СВЕДЕНИЯ О НАЛИЧИИ КОМПЬЮТЕРНОЙ И ОРГТЕХНИКИ', 'КОМПЬЮТЕРЛІК ЖӘНЕ КЕҢСЕ ТЕХНИКАСЫНЫҢ БАР БОЛУЫ ТУРАЛЫ МӘЛІМЕТТЕР')}</h1>
+      <p>${T('Учет материально-технических средств по кабинетам учреждения', 'Мекеме кабинеттері бойынша материалдық-техникалық құралдарды есепке алу')} · ${T('по состоянию на', 'жағдай бойынша')} ${date}</p></div>
+    <h2>${T('Общее количество техники (Сводный баланс)', 'Техниканың жалпы саны (Жиынтық баланс)')} — ${sum} ${T('шт.', 'дана')}</h2>
+    <div class="sum-cards">
+      <div class="sum-card"><h3>💻 ${T('КОМПЬЮТЕРЫ И ПК', 'КОМПЬЮТЕРЛЕР ЖӘНЕ ДК')}</h3>${line('mono')}${line('comp')}${line('note')}${line('mon')}</div>
+      <div class="sum-card"><h3>📺 ${T('МУЛЬТИМЕДИА', 'МУЛЬТИМЕДИА')}</h3>${line('panel')}${line('proj')}</div>
+      <div class="sum-card"><h3>🖨️ ${T('ОРГТЕХНИКА', 'КЕҢСЕ ТЕХНИКАСЫ')}</h3>${line('pbw')}${line('pscan')}${line('pcolor')}${line('p3d')}</div>
+      ${others.length ? `<div class="sum-card"><h3>🔌 ${T('ПРОЧЕЕ ОБОРУДОВАНИЕ', 'БАСҚА ЖАБДЫҚ')}</h3>${others.map(k => `<div>${esc(kk ? trText(k.slice(6)) : k.slice(6))}: <b>${total[k]} ${T('шт.', 'дана')}</b></div>`).join('')}</div>` : ''}
+    </div>
+    <h2>${T('Распределение оборудования по кабинетам', 'Жабдықтың кабинеттер бойынша бөлінуі')}</h2>
+    <table class="sum-table"><thead><tr><th>${T('Кабинет', 'Кабинет')}</th><th>${T('Компьютерная техника', 'Компьютерлік техника')}</th><th>${T('Мультимедиа', 'Мультимедиа')}</th>
+      <th>${T('Периферия и оргтехника', 'Перифериялық және кеңсе техникасы')}</th>${hasOther ? `<th>${T('Прочее', 'Басқа')}</th>` : ''}</tr></thead><tbody>
+    ${rooms.map(r => { const g = roomMap.get(r); return `<tr><td class="sum-room">${r ? `${T('Кабинет', 'Кабинет')} ${esc(kk ? trText(r) : r)}` : T('Без кабинета', 'Кабинетсіз')}</td>
+      <td>${cell(g.pc)}</td><td>${cell(g.media)}</td><td>${cell(g.print)}</td>${hasOther ? `<td>${cell(g.other)}</td>` : ''}</tr>`; }).join('')}
+    </tbody></table>
+    ${rooms.length ? '' : `<p class="muted">${T('Нет техники по выбранным условиям', 'Таңдалған шарттар бойынша техника жоқ')}</p>`}
+  </div>`;
+};
+AFTER.summary = () => document.body.classList.add('printing-labels');
 
 // ----- настройки -----
 VIEWS.settings = async () => {
@@ -858,7 +961,7 @@ VIEWS.labels = async () => {
     <div class="lname">${esc(a.name)}</div><div class="lroom">${a.room ? 'Каб. ' + esc(a.room) : ''}</div></div></div>`).join('')}</div>`;
 };
 AFTER.labels = () => document.body.classList.add('printing-labels');
-window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/labels')) document.body.classList.remove('printing-labels'); });
+window.addEventListener('hashchange', () => { if (!/^#\/(labels|summary)/.test(location.hash)) document.body.classList.remove('printing-labels'); });
 
 // ---------- Excel ----------
 function xlsxDownload(sheets, filename) {
