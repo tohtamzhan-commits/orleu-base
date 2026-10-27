@@ -839,7 +839,9 @@ const isStoreRoom = code => /^Склад|лестниц/i.test(code || '');
 VIEWS.summary = async () => {
   await loadAssets();
   const kk = LANG === 'kk', T = (ru, kz) => kk ? kz : ru;
-  const o = S.sumOpts ||= { writeoff: false, stores: false };
+  const o = S.sumOpts ||= { writeoff: false, stores: false, stock: true };
+  if (o.stock === undefined) o.stock = true;
+  const stock = o.stock ? await api('GET', '/api/stock') : [];
   // считаем физические вещи: вместо разделённого комплекта — его части
   const items = S.assets.filter(a => a.status !== 'Списана' && a.category !== 'Программное обеспечение' && !a.parts
     && (o.writeoff || a.status !== 'Предлагается к списанию') && (o.stores || !isStoreRoom(a.room)));
@@ -866,7 +868,8 @@ VIEWS.summary = async () => {
   return `<div class="btnrow no-print"><button onclick="history.back()">${T('← Назад', '← Артқа')}</button>
     <button class="primary" onclick="print()">${T('🖨 Печать / сохранить в PDF', '🖨 Басып шығару / PDF сақтау')}</button>
     <label class="opt"><input type="checkbox" ${o.writeoff ? 'checked' : ''} onchange="S.sumOpts.writeoff=this.checked;route()"> ${T('учитывать предложенные к списанию', 'есептен шығаруға ұсынылғандарды есептеу')}</label>
-    <label class="opt"><input type="checkbox" ${o.stores ? 'checked' : ''} onchange="S.sumOpts.stores=this.checked;route()"> ${T('учитывать склады и «под лестницей»', 'қоймалар мен «баспалдақ астын» есептеу')}</label></div>
+    <label class="opt"><input type="checkbox" ${o.stores ? 'checked' : ''} onchange="S.sumOpts.stores=this.checked;route()"> ${T('учитывать склады и «под лестницей»', 'қоймалар мен «баспалдақ астын» есептеу')}</label>
+    <label class="opt"><input type="checkbox" ${o.stock ? 'checked' : ''} onchange="S.sumOpts.stock=this.checked;route()"> ${T('включить ТМЗ (расходники)', 'ТМҚ (шығын материалдары) қосу')}</label></div>
   <div class="summary" translate="no">
     <div class="sum-head"><h1>${T('СВЕДЕНИЯ О НАЛИЧИИ КОМПЬЮТЕРНОЙ И ОРГТЕХНИКИ', 'КОМПЬЮТЕРЛІК ЖӘНЕ КЕҢСЕ ТЕХНИКАСЫНЫҢ БАР БОЛУЫ ТУРАЛЫ МӘЛІМЕТТЕР')}</h1>
       <p>${T('Учет материально-технических средств по кабинетам учреждения', 'Мекеме кабинеттері бойынша материалдық-техникалық құралдарды есепке алу')} · ${T('по состоянию на', 'жағдай бойынша')} ${date}</p></div>
@@ -884,8 +887,40 @@ VIEWS.summary = async () => {
       <td>${cell(g.pc)}</td><td>${cell(g.media)}</td><td>${cell(g.print)}</td>${hasOther ? `<td>${cell(g.other)}</td>` : ''}</tr>`; }).join('')}
     </tbody></table>
     ${rooms.length ? '' : `<p class="muted">${T('Нет техники по выбранным условиям', 'Таңдалған шарттар бойынша техника жоқ')}</p>`}
+    ${o.stock ? stockSummary(stock, T, kk) : ''}
   </div>`;
 };
+
+// ТМЗ в отчёте: итог по наименованиям (одинаковые названия из разных кабинетов складываются) и по местам хранения
+function stockSummary(stock, T, kk) {
+  const items = stock.filter(x => Number(x.qty) > 0);
+  const unit = u => kk ? trText(u) : u;
+  const totals = new Map();
+  for (const x of items) {
+    const key = x.name.trim().toLowerCase() + '|' + x.unit;
+    const t = totals.get(key) || { name: x.name.trim(), unit: x.unit, qty: 0 };
+    t.qty += Number(x.qty);
+    totals.set(key, t);
+  }
+  const byPlace = new Map();
+  for (const x of items) {
+    const r = x.room || '';
+    if (!byPlace.has(r)) byPlace.set(r, []);
+    byPlace.get(r).push(x);
+  }
+  const places = [...byPlace.keys()].sort((x, y) => x === '' ? 1 : y === '' ? -1 : byRoom({ code: x }, { code: y }));
+  const zero = stock.length - items.length;
+  return `<h2>${T('Расходные материалы (ТМЗ)', 'Шығын материалдары (ТМҚ)')} — ${totals.size} ${T('наим.', 'атау')}</h2>
+    <table class="sum-table"><thead><tr><th>№</th><th>${T('Наименование', 'Атауы')}</th><th>${T('Количество', 'Саны')}</th></tr></thead><tbody>
+    ${[...totals.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru')).map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.name)}</td><td><b>${+t.qty.toFixed(3)}</b> ${esc(unit(t.unit))}</td></tr>`).join('')}
+    </tbody></table>
+    ${zero ? `<p class="muted sum-note">${T(`Позиций с нулевым остатком (не показаны): ${zero}`, `Қалдығы нөл позициялар (көрсетілмеген): ${zero}`)}</p>` : ''}
+    <h2>${T('ТМЗ по кабинетам и складам', 'Кабинеттер мен қоймалар бойынша ТМҚ')}</h2>
+    <table class="sum-table"><thead><tr><th>${T('Кабинет', 'Кабинет')}</th><th>${T('Материалы', 'Материалдар')}</th></tr></thead><tbody>
+    ${places.map(r => `<tr><td class="sum-room">${r ? (/^\d/.test(r) ? `${T('Кабинет', 'Кабинет')} ` : '') + esc(kk ? trText(r) : r) : T('Без места', 'Орны жоқ')}</td>
+      <td>${byPlace.get(r).sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(x => `${esc(x.name)} — ${+Number(x.qty).toFixed(3)} ${esc(unit(x.unit))}`).join(', ')}</td></tr>`).join('')}
+    </tbody></table>`;
+}
 AFTER.summary = () => document.body.classList.add('printing-labels');
 
 // ----- настройки -----

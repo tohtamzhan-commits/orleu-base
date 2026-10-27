@@ -156,3 +156,4 @@ label.btn:not(.primary){background:#e9f0fa;color:#16477e}
   .sum-table tr{break-inside:avoid}
 }
 @media(max-width:600px){.sum-head h1{font-size:17px}.summary h2{margin:18px 12px 10px}.sum-cards{margin:0 12px}.sum-table{width:calc(100% - 24px);margin:0 12px}}
+.sum-note{margin:8px 26px 0;font-size:12px}
