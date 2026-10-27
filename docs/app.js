@@ -136,7 +136,7 @@ function assetTable(list, { showRoom = true, showEmp = true } = {}) {
     <th>Состояние</th><th class="hide-sm">Статус</th></tr></thead><tbody>
     ${list.map((a, i) => `<tr class="clickable" onclick="location.hash='#/a/${encodeURIComponent(a.inv)}'">
       <td class="num-col">${i + 1}</td><td class="thumb-col">${a.photo_url ? `<img class="thumb" src="${esc(a.photo_url)}" alt="" loading="lazy">` : '<span class="thumb thumb-empty">📷</span>'}</td>
-      <td class="num">${esc(a.inv)}</td><td>${esc(a.name)}</td>
+      <td class="num">${esc(a.inv)}</td><td>${esc(a.name)}${a.parts ? ` <span class="badge b-blue">🧩 ${a.parts} ${partsWord(a.parts)}</span>` : ''}</td>
       ${showRoom ? `<td>${a.room ? esc(a.room) : '<span class="badge b-bad">нет</span>'}</td>` : ''}
       ${showEmp ? `<td class="hide-sm">${esc(a.employee || '—')}</td>` : ''}
       <td>${conditionBadge(a.condition)}</td><td class="hide-sm">${statusBadge(a.status)}</td></tr>`).join('')}
@@ -241,6 +241,7 @@ VIEWS.a = async inv => {
     <div class="btnrow">${conditionBadge(a.condition)} ${statusBadge(a.status)}</div></div>
     <div class="qr-box">${qrSvg(assetUrl(a.inv))}<br><small class="muted">постоянный QR</small></div></div>
     <div class="kv">
+      ${a.parent ? `<div>Часть комплекта</div><div><a href="#/a/${encodeURIComponent(a.parent.inv)}">${esc(a.parent.inv)} — ${esc(a.parent.name)}</a></div>` : ''}
       <div>Кабинет</div><div><b>${a.room ? esc(roomName(a.room)) : '<span class="badge b-bad">не указан</span>'}</b></div>
       <div>Закреплено за</div><div><b>${esc(a.employee || 'не закреплено')}</b></div>
       <div>МОЛ</div><div>${esc(a.mol || '—')}</div>
@@ -253,6 +254,7 @@ VIEWS.a = async inv => {
     ${adm ? `<div class="btnrow">
       <button class="primary" onclick="moveAsset('${esc(a.inv)}')">🔄 Переместить</button>
       <button onclick="editAsset('${esc(a.inv)}')">✎ Изменить</button>
+      ${a.parent ? '' : `<button onclick="splitAsset('${esc(a.inv)}')">🧩 ${a.children.length ? 'Добавить части' : 'Разделить на части'}</button>`}
       <button onclick="quickCondition('${esc(a.inv)}')">🛠️ Состояние</button>
       <button onclick="openLabels(['${esc(a.inv)}'])">🔳 Печать QR</button>
       <button class="danger" onclick="deleteAsset('${esc(a.inv)}')">Удалить</button></div>` :
@@ -261,6 +263,10 @@ VIEWS.a = async inv => {
       ? `<span class="badge b-ok">✓ отмечено в «${esc(o.name)}»</span>`
       : `<button class="primary" onclick="markInAudit(${o.id},'${esc(a.inv)}')">✓ Отметить в «${esc(o.name)}»</button>`).join(' ')}</div>` : ''}
   </div>
+  ${a.children.length ? `<div class="panel"><h2>Части комплекта — ${a.children.length}</h2>
+    <p class="muted">Каждая часть перемещается, закрепляется и сканируется отдельно, у каждой своя наклейка.</p>
+    ${assetTable(a.children)}
+    <div class="btnrow"><button onclick="openLabels(${esc(JSON.stringify(a.children.map(c => c.inv)))})">🔳 Наклейки частей</button></div></div>` : ''}
   <div class="panel"><div class="top"><h2>Фото</h2>
     ${adm ? `<div class="btnrow photo-btns">
       <label class="btn primary photo-cam">📷 Сфотографировать<input type="file" accept="image/*" capture="environment" hidden onchange="uploadPhotos('${esc(a.inv)}', this.files)"></label>
@@ -323,6 +329,38 @@ async function deleteAsset(inv) {
   if (!confirm(`Удалить ${inv} из базы полностью? Для списанной техники лучше поставить статус «Списана» — тогда история сохранится.`)) return;
   await act(() => api('DELETE', '/api/assets/' + encodeURIComponent(inv)), 'Удалено');
   await loadAssets(); location.hash = '#/assets';
+}
+
+// ----- части комплекта -----
+const partsWord = n => n % 10 === 1 && n % 100 !== 11 ? 'часть' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'части' : 'частей';
+
+function splitAsset(inv) {
+  const a = S.assets.find(x => x.inv === inv);
+  dialog(`Разделить на части: ${esc(a.name)}`,
+    `<div class="full note">Используйте, когда под одним инвентарным номером несколько вещей: монитор и системный блок, несколько моноблоков в классе и т. п.
+      Каждая часть получит номер <b>${esc(inv)}-1</b>, <b>-2</b>… со своей наклейкой, кабинетом и сотрудником. Бухгалтерский номер и стоимость остаются у основной записи.</div>
+    <div class="full btnrow">
+      <button type="button" onclick="fillParts(['Монитор','Системный блок'])">Монитор + Системный блок</button>
+      <button type="button" onclick="fillParts(['Монитор','Системный блок','Клавиатура','Мышь'])">+ клавиатура и мышь</button>
+    </div>
+    <label class="full">Одинаковые части<span class="btnrow" style="margin:4px 0">
+      <input id="sameName" placeholder="Название, например: Моноблок" value="${esc(a.name.replace(/[\s\d()№\-]+$/, ''))}" style="flex:2">
+      <input id="sameCount" type="number" min="1" max="100" value="5" style="flex:1;min-width:70px">
+      <button type="button" onclick="fillSame()">Заполнить</button></span></label>` +
+    textarea('Части — каждая с новой строки *', 'parts', ''),
+    async f => {
+      const parts = f.parts.split(/\n/).map(x => x.trim()).filter(Boolean);
+      if (!parts.length) throw new Error('Укажите хотя бы одну часть');
+      if (parts.length > 100) throw new Error('Не больше 100 частей за раз');
+      const created = await api('POST', `/api/assets/${encodeURIComponent(inv)}/split`, { parts });
+      toast(`Создано частей: ${created.length}`);
+      await refresh();
+    }, 'Разделить');
+}
+function fillParts(list) { $('#dlgform textarea[name=parts]').value = list.join('\n'); }
+function fillSame() {
+  const name = $('#sameName').value.trim() || 'Часть', n = Math.min(100, Math.max(1, Number($('#sameCount').value) || 1));
+  fillParts(Array.from({ length: n }, (_, i) => `${name} ${i + 1}`));
 }
 
 // ----- фото -----
@@ -800,7 +838,7 @@ function qrSvg(text, cell = 4) {
 
 function openLabels(invs) {
   const set = new Set(invs);
-  S.labelItems = S.assets.filter(a => set.has(a.inv) && a.category !== 'Программное обеспечение' && a.status !== 'Списана');
+  S.labelItems = S.assets.filter(a => set.has(a.inv) && a.category !== 'Программное обеспечение' && a.status !== 'Списана' && !a.parts);
   if (!S.labelItems.length) return alert('Нет техники для печати');
   location.hash = '#/labels';
 }
@@ -836,7 +874,7 @@ function xlsxDownload(sheets, filename) {
 const today = () => new Date().toISOString().slice(0, 10);
 const REPORT_COLS = [['inv', 'Инв. номер', 16], ['name', 'Наименование', 42], ['category', 'Категория', 20], ['room', 'Кабинет', 12],
   ['employee', 'Закреплено за', 30], ['condition', 'Состояние', 16], ['status', 'Статус', 22], ['serial', 'Серийный №', 16],
-  ['acquired', 'Дата поступления', 14], ['cost', 'Первонач. стоимость', 16], ['residual', 'Остаточная стоимость', 16], ['mol', 'МОЛ', 28], ['notes', 'Примечание', 40]];
+  ['acquired', 'Дата поступления', 14], ['cost', 'Первонач. стоимость', 16], ['residual', 'Остаточная стоимость', 16], ['mol', 'МОЛ', 28], ['parent_inv', 'Часть комплекта', 18], ['notes', 'Примечание', 40]];
 const toRows = (cols, list) => [['№', ...cols.map(c => trText(c[1]))],
   ...list.map((x, i) => [i + 1, ...cols.map(c => { const v = x[c[0]] ?? ''; return typeof v === 'string' ? trText(v) : v; })])];
 const widthsOf = cols => [5, ...cols.map(c => c[2])];

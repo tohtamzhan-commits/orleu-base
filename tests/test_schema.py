@@ -171,3 +171,25 @@ def test_photos_admin_only(conn):
     assert cur.rowcount == 0
     with pytest.raises(psycopg2.Error, match="row-level security"):
         cur.execute("insert into asset_photos (asset_id, path) values ((select id from assets limit 1), 'x/2.jpg')")
+
+
+def test_split_into_parts(conn):
+    cur = as_user(conn, ADMIN)
+    cur.execute("select split_asset('241300000002', array['Монитор', 'Системный блок'])")
+    assert cur.fetchone()[0] == ["241300000002-1", "241300000002-2"]
+    # повторное деление продолжает нумерацию, части наследуют кабинет
+    cur.execute("select split_asset('241300000002', array['Клавиатура'])")
+    assert cur.fetchone()[0] == ["241300000002-3"]
+    cur.execute("""select a.inv, a.name, a.room_id = p.room_id from assets a join assets p on p.id = a.parent_id
+                   where p.inv = '241300000002' order by a.inv""")
+    assert cur.fetchall() == [("241300000002-1", "Монитор", True), ("241300000002-2", "Системный блок", True),
+                              ("241300000002-3", "Клавиатура", True)]
+    # часть перемещается отдельно от основной записи
+    cur.execute("select move_asset('241300000002-2', (select id from rooms where code = '29'), null, 'процессор в 29')")
+    cur.execute("select r.code from assets a join rooms r on r.id = a.room_id where inv in ('241300000002-1', '241300000002-2') order by inv")
+    assert [r[0] for r in cur.fetchall()] == ["27", "29"]
+    with pytest.raises(psycopg2.Error, match="уже часть комплекта"):
+        cur.execute("select split_asset('241300000002-1', array['x'])")
+    cur = as_user(conn, VIEWER)
+    with pytest.raises(psycopg2.Error, match="Недостаточно прав"):
+        cur.execute("select split_asset('241300000003', array['x'])")

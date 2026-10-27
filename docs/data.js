@@ -66,7 +66,12 @@ async function assetsAll() {
   const first = new Map();
   for (const p of photos) if (!first.has(p.asset_id)) first.set(p.asset_id, p.path);
   const urls = await signedUrls([...first.values()]);
-  return assets.map(a => ({ ...flatAsset(a), photo_url: urls.get(first.get(a.id)) || null }));
+  // части комплекта: номер основной записи у части и число частей у основной записи
+  const invById = new Map(assets.map(a => [a.id, a.inv]));
+  const parts = new Map();
+  for (const a of assets) if (a.parent_id) parts.set(a.parent_id, (parts.get(a.parent_id) || 0) + 1);
+  return assets.map(a => ({ ...flatAsset(a), photo_url: urls.get(first.get(a.id)) || null,
+    parent_inv: a.parent_id ? invById.get(a.parent_id) || null : null, parts: parts.get(a.id) || 0 }));
 }
 
 // ---------- фото ----------
@@ -121,10 +126,12 @@ async function auditState(id) {
   const au = await q(sb.from('audits').select('*, rooms(code)').eq('id', id).maybeSingle());
   if (!au) throw new ApiError('Инвентаризация не найдена', 404);
   const [assets, scans, rooms] = await Promise.all([assetsAll(), all('audit_scans', '*', b => b.eq('audit_id', id)), all('rooms')]);
+  const scannedIds = new Set(scans.map(s => s.asset_id));
   const code = rid => rooms.find(r => r.id === rid)?.code || null;
   const byAsset = new Map(scans.map(s => [s.asset_id, s]));
   const expected = assets
-    .filter(a => a.status !== 'Списана' && a.category !== 'Программное обеспечение' && (!au.room_id || a.room_id === au.room_id))
+    .filter(a => a.status !== 'Списана' && a.category !== 'Программное обеспечение' && (!au.room_id || a.room_id === au.room_id)
+      && (!a.parts || scannedIds.has(a.id)))
     .map(a => { const s = byAsset.get(a.id); return { inv: a.inv, name: a.name, category: a.category, condition: a.condition, room: a.room, employee: a.employee,
       scanned_at: s ? fmt(s.at) : null, scanned_by: s?.user || null, found_room: s ? code(s.found_room_id) : null }; })
     .sort((x, y) => byRoom({ code: x.room || '~' }, { code: y.room || '~' }) || x.inv.localeCompare(y.inv));
@@ -166,8 +173,15 @@ const ROUTES = [
     a.open_audits = audits.map(o => ({ id: o.id, name: o.name, room: o.rooms?.code || null, scanned: scanned.has(o.id) }));
     a.updated_at = fmt(a.updated_at);
     a.photos = await assetPhotos(a.id);
+    const [children, parent] = await Promise.all([
+      q(sb.from('assets').select(ASSET_COLS).eq('parent_id', a.id).order('inv')),
+      a.parent_id ? q(sb.from('assets').select('inv, name').eq('id', a.parent_id).maybeSingle()) : null,
+    ]);
+    a.children = children.map(flatAsset);
+    a.parent = parent;
     return a;
   }],
+  ['POST', /^\/api\/assets\/([^/]+)\/split$/, async (inv, body) => q(sb.rpc('split_asset', { p_inv: inv, p_parts: body.parts }))],
   ['POST', /^\/api\/assets\/([^/]+)\/photos$/, async (inv, body) => {
     const a = await assetByInv(inv);
     const path = `${a.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;

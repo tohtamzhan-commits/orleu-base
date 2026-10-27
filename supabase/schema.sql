@@ -440,3 +440,46 @@ drop policy if exists "orleu photos insert" on storage.objects;
 create policy "orleu photos insert" on storage.objects for insert to authenticated with check (bucket_id = 'asset-photos' and public.is_admin());
 drop policy if exists "orleu photos delete" on storage.objects;
 create policy "orleu photos delete" on storage.objects for delete to authenticated using (bucket_id = 'asset-photos' and public.is_admin());
+
+-- ---------- части комплекта ----------
+-- Под одним бухгалтерским номером бывает несколько вещей (монитор + системный блок,
+-- класс из нескольких моноблоков). Каждая часть — отдельная запись с номером «<номер>-1»,
+-- своим кабинетом, сотрудником и наклейкой; parent_id указывает на основную запись.
+alter table public.assets add column if not exists parent_id bigint references public.assets(id) on delete set null;
+create index if not exists assets_parent on public.assets(parent_id);
+
+create or replace function public.split_asset(p_inv text, p_parts text[])
+returns text[] language plpgsql security definer set search_path = public as $$
+declare
+  a assets;
+  part text;
+  n int;
+  new_inv text;
+  created text[] := '{}';
+begin
+  if not is_admin() then raise exception 'Недостаточно прав'; end if;
+  select * into a from assets where inv = p_inv for update;
+  if not found then raise exception 'Инвентарный номер % не найден', p_inv; end if;
+  if a.parent_id is not null then raise exception 'Это уже часть комплекта — делить можно только основную запись'; end if;
+  if coalesce(array_length(p_parts, 1), 0) = 0 then raise exception 'Укажите хотя бы одну часть'; end if;
+  -- продолжаем нумерацию, если части уже есть
+  select coalesce(max(nullif(substring(inv from '-(\d+)$'), '')::int), 0) into n from assets where parent_id = a.id;
+  foreach part in array p_parts loop
+    part := trim(part);
+    continue when part = '';
+    n := n + 1;
+    new_inv := a.inv || '-' || n;
+    while exists (select 1 from assets where inv = new_inv) loop
+      n := n + 1;
+      new_inv := a.inv || '-' || n;
+    end loop;
+    insert into assets (inv, name, category, room_id, employee_id, mol, status, acquired, source, parent_id, notes)
+    values (new_inv, part, a.category, a.room_id, a.employee_id, a.mol, a.status, a.acquired, 'Часть комплекта', a.id,
+            'Часть комплекта ' || a.inv || ' «' || a.name || '»');
+    created := created || new_inv;
+  end loop;
+  perform log_event('Разделено на части', a.inv, array_to_string(created, ', '));
+  return created;
+end $$;
+revoke execute on function public.split_asset(text, text[]) from public, anon;
+grant execute on function public.split_asset(text, text[]) to authenticated;
