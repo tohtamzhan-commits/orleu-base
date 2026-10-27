@@ -402,10 +402,10 @@ VIEWS.room = async id => {
     ${Object.entries(groups).map(([who, arr]) => `<h3>👤 ${esc(who)} — ${arr.length} ед.</h3>${assetTable(arr, { showRoom: false, showEmp: false })}`).join('') || '<div class="empty">Техники нет</div>'}</div>
   <div class="panel"><div class="top"><h2>ТМЗ в кабинете${stock.length ? ' — ' + stock.length : ''}</h2>
     <div class="btnrow"><button onclick="location.hash='#/stock'">Весь склад ТМЗ →</button></div></div>
-    ${stock.length ? `<div class="scroll"><table><tr><th class="num-col">№</th><th>Наименование</th><th>Остаток</th><th class="hide-sm">Примечание</th><th></th></tr>
-    ${stock.map((s, i) => `<tr><td class="num-col">${i + 1}</td><td>${esc(s.name)}</td>
+    ${stock.length ? `<div class="scroll"><table><tr><th class="num-col">№</th><th>Наименование</th><th>Остаток</th><th class="hide-sm">Примечание</th><th class="hide-sm"></th></tr>
+    ${stock.map((s, i) => `<tr class="clickable" onclick="stockCard(${s.id})"><td class="num-col">${i + 1}</td><td>${esc(s.name)}</td>
       <td class="num ${s.qty <= s.min_qty ? 'bad' : 'ok'}"><b>${s.qty}</b> ${esc(s.unit)}</td><td class="hide-sm">${esc(s.notes)}</td>
-      <td style="white-space:nowrap">${isAdmin() ? `<button onclick="stockMove(${s.id},-1)">Выдать</button> <button onclick="stockMove(${s.id},1)">Приход</button> <button onclick="editStock(${s.id})">✎</button>` : ''}
+      <td class="hide-sm" style="white-space:nowrap" onclick="event.stopPropagation()">${isAdmin() ? `<button onclick="stockMove(${s.id},-1)">Выдать</button> <button onclick="stockMove(${s.id},1)">Приход</button> <button onclick="editStock(${s.id})">✎</button>` : ''}
         <button onclick="stockHistory(${s.id})">🕘</button></td></tr>`).join('')}</table></div>` : '<div class="empty">В этом кабинете расходных материалов нет</div>'}</div>`;
 };
 
@@ -489,11 +489,11 @@ VIEWS.stock = async () => {
   return `<div class="top"><div><h1>ТМЗ и расходные материалы</h1><div class="muted">Количественный учёт: приход, выдача, остатки. Отдельно от основных средств.</div></div>
     <div class="btnrow">${isAdmin() ? '<button class="primary" onclick="editStock()">＋ Позиция</button>' : ''}<button onclick="download('stock')">⇩ Excel</button></div></div>
   <div class="filters" style="grid-template-columns:1fr"><input type="search" placeholder="Поиск по названию" oninput="document.querySelectorAll('#stockT tr[data-n]').forEach(r=>r.style.display=r.dataset.n.includes(this.value.toLowerCase())?'':'none')"></div>
-  <div class="panel scroll"><table id="stockT"><tr><th class="num-col">№</th><th>Наименование</th><th>Остаток</th><th class="hide-sm">Мин.</th><th>Где</th><th class="hide-sm">Примечание</th><th></th></tr>
-  ${items.map((s, i) => `<tr data-n="${esc(s.name.toLowerCase())}"><td class="num-col">${i + 1}</td><td>${esc(s.name)}</td>
+  <div class="panel scroll"><table id="stockT"><tr><th class="num-col">№</th><th>Наименование</th><th>Остаток</th><th class="hide-sm">Мин.</th><th>Где</th><th class="hide-sm">Примечание</th><th class="hide-sm"></th></tr>
+  ${items.map((s, i) => `<tr class="clickable" data-n="${esc(s.name.toLowerCase())}" onclick="stockCard(${s.id})"><td class="num-col">${i + 1}</td><td>${esc(s.name)}</td>
     <td class="num ${s.qty <= s.min_qty ? 'bad' : 'ok'}"><b>${s.qty}</b> ${esc(s.unit)}</td><td class="hide-sm num">${s.min_qty}</td>
     <td>${esc(s.room || '—')}</td><td class="hide-sm">${esc(s.notes)}</td>
-    <td style="white-space:nowrap">${isAdmin() ? `<button onclick="stockMove(${s.id},-1)">Выдать</button> <button onclick="stockMove(${s.id},1)">Приход</button> <button onclick="editStock(${s.id})">✎</button>` : ''}
+    <td class="hide-sm" style="white-space:nowrap" onclick="event.stopPropagation()">${isAdmin() ? `<button onclick="stockMove(${s.id},-1)">Выдать</button> <button onclick="stockMove(${s.id},1)">Приход</button> <button onclick="editStock(${s.id})">✎</button>` : ''}
       <button onclick="stockHistory(${s.id})">🕘</button></td></tr>`).join('')}</table>
   ${items.length ? '' : '<div class="empty">Позиций нет</div>'}</div>`;
 };
@@ -528,10 +528,19 @@ function stockMove(id, sign) {
       toast('Сохранено'); route();
     }, sign < 0 ? 'Выдать' : 'Оприходовать');
 }
-async function stockHistory(id) {
+async function stockCard(id) { return stockHistory(id, true); }
+
+async function stockHistory(id, card = false) {
   const s = S.stock.find(x => x.id === id), moves = await api('GET', `/api/stock/${id}/moves`);
   const d = $('#modal');
-  d.innerHTML = `<h2>Движение: ${esc(s.name)}</h2><div class="scroll"><table><tr><th>Дата</th><th>Кол-во</th><th>Кому / от кого</th><th>Кто</th></tr>
+  const info = card ? `<div class="kv">
+      <div>Остаток</div><div class="${s.qty <= s.min_qty ? 'bad' : 'ok'}"><b>${s.qty} ${esc(s.unit)}</b></div>
+      <div>Минимальный остаток</div><div>${s.min_qty}</div><div>Где хранится</div><div>${esc(s.room || '—')}</div>
+      <div>Примечание</div><div>${esc(s.notes || '—')}</div></div>
+    ${isAdmin() ? `<div class="btnrow"><button class="primary" onclick="this.closest('dialog').close();stockMove(${s.id},-1)">Выдать</button>
+      <button onclick="this.closest('dialog').close();stockMove(${s.id},1)">Приход</button>
+      <button onclick="this.closest('dialog').close();editStock(${s.id})">✎ Изменить</button></div>` : ''}` : '';
+  d.innerHTML = `<h2>${card ? esc(s.name) : 'Движение: ' + esc(s.name)}</h2>${info}${card ? '<h3>Движение</h3>' : ''}<div class="scroll"><table><tr><th>Дата</th><th>Кол-во</th><th>Кому / от кого</th><th>Кто</th></tr>
     ${moves.map(m => `<tr><td class="num">${esc(m.at)}</td><td class="num ${m.delta < 0 ? 'bad' : 'ok'}">${m.delta > 0 ? '+' : ''}${m.delta}</td><td>${esc(m.counterpart)} ${esc(m.note)}</td><td>${esc(m.user)}</td></tr>`).join('')}</table>
     ${moves.length ? '' : '<div class="empty">Движений нет</div>'}</div><div class="actions"><button onclick="this.closest('dialog').close()">Закрыть</button></div>`;
   d.showModal();

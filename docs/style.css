@@ -135,3 +135,5 @@ label.btn:not(.primary){background:#e9f0fa;color:#16477e}
 .photo-btns{margin:0}
 /* на компьютере камеры нет — оставляем одну кнопку выбора файла */
 @media (hover:hover) and (pointer:fine){.photo-cam{display:none!important}}
+/* на телефоне плавающая кнопка «Сканер» не должна закрывать последние строки */
+@media(max-width:900px){main{padding-bottom:96px!important}}
